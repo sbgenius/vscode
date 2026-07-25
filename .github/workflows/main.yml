@@ -1,0 +1,99 @@
+name: Code-Server on Windows Runner (ngrok)
+
+on:
+  workflow_dispatch:
+    inputs:
+      password:
+        description: 'Password to access code-server'
+        required: true
+        type: string
+      ngrok_token:
+        description: 'Your ngrok authtoken'
+        required: true
+        type: string
+      duration_minutes:
+        description: 'How long to keep the session alive (minutes)'
+        required: false
+        default: '350'
+        type: string
+
+jobs:
+  code-server:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (optional, remove if not needed)
+        uses: actions/checkout@v4
+
+      - name: Install code-server via npm
+        shell: pwsh
+        run: |
+          npm install -g code-server
+
+      - name: Download and set up ngrok
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive -Path "ngrok.zip" -DestinationPath "." -Force
+          ./ngrok.exe config add-authtoken ${{ github.event.inputs.ngrok_token }}
+
+      - name: Configure code-server
+        shell: pwsh
+        run: |
+          $configDir = "$HOME\.config\code-server"
+          New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+          @"
+          bind-addr: 127.0.0.1:8080
+          auth: password
+          password: ${{ github.event.inputs.password }}
+          cert: false
+          "@ | Out-File -FilePath "$configDir\config.yaml" -Encoding utf8
+
+      - name: Start code-server (background)
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "code-server" -ArgumentList "--bind-addr 127.0.0.1:8080" -WindowStyle Hidden
+          Start-Sleep -Seconds 10
+
+      - name: Start ngrok tunnel (background)
+        shell: pwsh
+        run: |
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "http 8080 --log=stdout --log-format=logfmt" -RedirectStandardOutput "ngrok.log" -WindowStyle Hidden
+          Start-Sleep -Seconds 8
+
+      - name: Retrieve public ngrok URL
+        shell: pwsh
+        run: |
+          $maxAttempts = 10
+          $url = $null
+          for ($i = 0; $i -lt $maxAttempts; $i++) {
+            try {
+              $resp = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -Method Get
+              if ($resp.tunnels.Count -gt 0) {
+                $url = $resp.tunnels[0].public_url
+                break
+              }
+            } catch {
+              Start-Sleep -Seconds 3
+            }
+          }
+          if ($null -eq $url) {
+            Write-Error "Failed to retrieve ngrok URL"
+            exit 1
+          }
+          Write-Host "=================================================="
+          Write-Host " Code-Server is live at: $url"
+          Write-Host "=================================================="
+          echo "CODE_SERVER_URL=$url" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Print connection info
+        shell: pwsh
+        run: |
+          Write-Host "Access URL: ${{ env.CODE_SERVER_URL }}"
+          Write-Host "Password was set via workflow input (not printed for security)"
+
+      - name: Keep session alive
+        shell: pwsh
+        run: |
+          $minutes = [int]"${{ github.event.inputs.duration_minutes }}"
+          Write-Host "Keeping runner alive for $minutes minutes..."
+          Start-Sleep -Seconds ($minutes * 60)
