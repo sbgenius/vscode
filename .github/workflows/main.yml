@@ -67,8 +67,14 @@ jobs:
       - name: Start ngrok tunnel (background)
         shell: pwsh
         run: |
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "http 8888 --log=stdout --log-format=logfmt" -RedirectStandardOutput "ngrok.log" -WindowStyle Hidden
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "http 8888 --log=stdout --log-format=logfmt" -RedirectStandardOutput "ngrok.log" -RedirectStandardError "ngrok-err.log" -WindowStyle Hidden
           Start-Sleep -Seconds 8
+          Write-Host "---- ngrok process check ----"
+          Get-Process ngrok -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, StartTime
+          Write-Host "---- ngrok.log ----"
+          Get-Content "ngrok.log" -ErrorAction SilentlyContinue
+          Write-Host "---- ngrok-err.log ----"
+          Get-Content "ngrok-err.log" -ErrorAction SilentlyContinue
 
       - name: Retrieve public ngrok URL
         shell: pwsh
@@ -87,6 +93,17 @@ jobs:
             }
           }
           if ($null -eq $url) {
+            Write-Host "---- Diagnostic dump: ngrok not reachable at 127.0.0.1:4040 ----"
+            Write-Host "---- ngrok.log ----"
+            Get-Content "ngrok.log" -ErrorAction SilentlyContinue
+            Write-Host "---- ngrok-err.log ----"
+            Get-Content "ngrok-err.log" -ErrorAction SilentlyContinue
+            Write-Host "---- jupyter.log ----"
+            Get-Content "jupyter.log" -ErrorAction SilentlyContinue
+            Write-Host "---- jupyter-err.log ----"
+            Get-Content "jupyter-err.log" -ErrorAction SilentlyContinue
+            Write-Host "---- ngrok process status ----"
+            Get-Process ngrok -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
             Write-Error "Failed to retrieve ngrok URL"
             exit 1
           }
