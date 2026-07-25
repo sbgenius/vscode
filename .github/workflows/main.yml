@@ -1,10 +1,10 @@
-name: Code-Server on Windows Runner (ngrok)
+name: JupyterLab on Windows Runner (ngrok)
 
 on:
   workflow_dispatch:
     inputs:
       password:
-        description: 'Password to access code-server'
+        description: 'Password to access JupyterLab'
         required: true
         type: string
       ngrok_token:
@@ -18,24 +18,22 @@ on:
         type: string
 
 jobs:
-  code-server:
+  jupyterlab:
     runs-on: windows-latest
     steps:
       - name: Checkout (optional, remove if not needed)
         uses: actions/checkout@v4
 
-      - name: Download and set up code-server (prebuilt binary)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install JupyterLab
         shell: pwsh
         run: |
-          $ver = (Invoke-RestMethod -Uri "https://api.github.com/repos/coder/code-server/releases/latest").tag_name -replace '^v',''
-          $url = "https://github.com/coder/code-server/releases/download/v$ver/code-server-$ver-windows-amd64.zip"
-          Write-Host "Downloading code-server $ver from $url"
-          Invoke-WebRequest -Uri $url -OutFile "code-server.zip"
-          Expand-Archive -Path "code-server.zip" -DestinationPath "." -Force
-          $extracted = Get-ChildItem -Directory -Filter "code-server-*" | Select-Object -First 1
-          Rename-Item -Path $extracted.FullName -NewName "code-server-bin"
-          $binPath = Join-Path (Get-Location) "code-server-bin\bin"
-          echo "$binPath" | Out-File -FilePath $env:GITHUB_PATH -Append
+          python -m pip install --upgrade pip
+          pip install jupyterlab
 
       - name: Download and set up ngrok
         shell: pwsh
@@ -44,31 +42,32 @@ jobs:
           Expand-Archive -Path "ngrok.zip" -DestinationPath "." -Force
           ./ngrok.exe config add-authtoken ${{ github.event.inputs.ngrok_token }}
 
-      - name: Configure code-server
+      - name: Generate Jupyter password hash
         shell: pwsh
         run: |
-          $configDir = "$HOME\.config\code-server"
+          $hash = python -c "from jupyter_server.auth import passwd; print(passwd('${{ github.event.inputs.password }}'))"
+          $configDir = "$HOME\.jupyter"
           New-Item -ItemType Directory -Force -Path $configDir | Out-Null
           @"
-          bind-addr: 127.0.0.1:8080
-          auth: password
-          password: ${{ github.event.inputs.password }}
-          cert: false
-          "@ | Out-File -FilePath "$configDir\config.yaml" -Encoding utf8
+          c.ServerApp.ip = '127.0.0.1'
+          c.ServerApp.port = 8888
+          c.ServerApp.open_browser = False
+          c.ServerApp.password = '$hash'
+          c.ServerApp.allow_remote_access = True
+          "@ | Out-File -FilePath "$configDir\jupyter_lab_config.py" -Encoding utf8
 
-      - name: Start code-server (background)
+      - name: Start JupyterLab (background)
         shell: pwsh
         run: |
-          $cmdPath = (Get-Command code-server.cmd).Source
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmdPath`" --bind-addr 127.0.0.1:8080" -WindowStyle Hidden -RedirectStandardOutput "code-server.log" -RedirectStandardError "code-server-err.log"
+          Start-Process -FilePath "jupyter" -ArgumentList "lab --config `"$HOME\.jupyter\jupyter_lab_config.py`"" -WindowStyle Hidden -RedirectStandardOutput "jupyter.log" -RedirectStandardError "jupyter-err.log"
           Start-Sleep -Seconds 15
-          Get-Content "code-server.log" -ErrorAction SilentlyContinue
-          Get-Content "code-server-err.log" -ErrorAction SilentlyContinue
+          Get-Content "jupyter.log" -ErrorAction SilentlyContinue
+          Get-Content "jupyter-err.log" -ErrorAction SilentlyContinue
 
       - name: Start ngrok tunnel (background)
         shell: pwsh
         run: |
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "http 8080 --log=stdout --log-format=logfmt" -RedirectStandardOutput "ngrok.log" -WindowStyle Hidden
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "http 8888 --log=stdout --log-format=logfmt" -RedirectStandardOutput "ngrok.log" -WindowStyle Hidden
           Start-Sleep -Seconds 8
 
       - name: Retrieve public ngrok URL
@@ -92,14 +91,14 @@ jobs:
             exit 1
           }
           Write-Host "=================================================="
-          Write-Host " Code-Server is live at: $url"
+          Write-Host " JupyterLab is live at: $url"
           Write-Host "=================================================="
-          echo "CODE_SERVER_URL=$url" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "JUPYTER_URL=$url" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Print connection info
         shell: pwsh
         run: |
-          Write-Host "Access URL: ${{ env.CODE_SERVER_URL }}"
+          Write-Host "Access URL: ${{ env.JUPYTER_URL }}"
           Write-Host "Password was set via workflow input (not printed for security)"
 
       - name: Keep session alive
