@@ -45,19 +45,22 @@ jobs:
           cert: false
           EOF
 
-      - name: Start code-server + ngrok, retrieve URL, keep alive
+      - name: Start code-server (background)
         run: |
-          # Start code-server in background
           nohup code-server --bind-addr 127.0.0.1:8080 > code-server.log 2>&1 &
           sleep 10
           echo "---- code-server.log ----"
           cat code-server.log || true
 
-          # Start ngrok in background
+      - name: Start ngrok tunnel (background)
+        run: |
           nohup ngrok http 8080 --log=stdout --log-format=logfmt > ngrok.log 2>&1 &
           sleep 8
+          echo "---- ngrok.log ----"
+          cat ngrok.log || true
 
-          # Poll ngrok's local API for the public URL
+      - name: Retrieve public ngrok URL
+        run: |
           url=""
           for i in $(seq 1 10); do
             resp=$(curl -s http://127.0.0.1:4040/api/tunnels || true)
@@ -70,18 +73,28 @@ jobs:
 
           if [ -z "$url" ]; then
             echo "---- Diagnostic dump: ngrok not reachable at 127.0.0.1:4040 ----"
-            echo "---- ngrok.log ----"
             cat ngrok.log || true
             echo "Failed to retrieve ngrok URL"
             exit 1
           fi
 
+          echo "CODE_SERVER_URL=$url" >> "$GITHUB_ENV"
+
+      - name: Print connection info
+        run: |
           echo "=================================================="
-          echo " Code-Server is live at: $url"
+          echo " Code-Server is live at: ${{ env.CODE_SERVER_URL }}"
           echo " Password was set via workflow input (not printed for security)"
           echo "=================================================="
 
-          # Keep this step (and therefore the background processes) alive
+      - name: Keep session alive
+        run: |
           minutes="${{ github.event.inputs.duration_minutes }}"
           echo "Keeping runner alive for $minutes minutes..."
+          while true; do
+            sleep 60
+            echo "$(date): still alive, tunnel: ${{ env.CODE_SERVER_URL }}"
+          done &
+          wait_pid=$!
           sleep $(( minutes * 60 ))
+          kill $wait_pid 2>/dev/null || true
