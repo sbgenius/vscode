@@ -24,10 +24,18 @@ jobs:
       - name: Checkout (optional, remove if not needed)
         uses: actions/checkout@v4
 
-      - name: Install code-server via npm
+      - name: Download and set up code-server (prebuilt binary)
         shell: pwsh
         run: |
-          npm install -g code-server
+          $ver = (Invoke-RestMethod -Uri "https://api.github.com/repos/coder/code-server/releases/latest").tag_name -replace '^v',''
+          $url = "https://github.com/coder/code-server/releases/download/v$ver/code-server-$ver-windows-amd64.zip"
+          Write-Host "Downloading code-server $ver from $url"
+          Invoke-WebRequest -Uri $url -OutFile "code-server.zip"
+          Expand-Archive -Path "code-server.zip" -DestinationPath "." -Force
+          $extracted = Get-ChildItem -Directory -Filter "code-server-*" | Select-Object -First 1
+          Rename-Item -Path $extracted.FullName -NewName "code-server-bin"
+          $binPath = Join-Path (Get-Location) "code-server-bin\bin"
+          echo "$binPath" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Download and set up ngrok
         shell: pwsh
@@ -51,8 +59,11 @@ jobs:
       - name: Start code-server (background)
         shell: pwsh
         run: |
-          Start-Process -FilePath "code-server" -ArgumentList "--bind-addr 127.0.0.1:8080" -WindowStyle Hidden
-          Start-Sleep -Seconds 10
+          $cmdPath = (Get-Command code-server.cmd).Source
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$cmdPath`" --bind-addr 127.0.0.1:8080" -WindowStyle Hidden -RedirectStandardOutput "code-server.log" -RedirectStandardError "code-server-err.log"
+          Start-Sleep -Seconds 15
+          Get-Content "code-server.log" -ErrorAction SilentlyContinue
+          Get-Content "code-server-err.log" -ErrorAction SilentlyContinue
 
       - name: Start ngrok tunnel (background)
         shell: pwsh
